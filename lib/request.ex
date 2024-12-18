@@ -1,159 +1,124 @@
 defmodule Request do
-  use Hound.Helpers
   require Logger
   use HTTPoison.Base
 
   @url "https://emec.mec.gov.br/emec/nova-index/gerar-arquivo-relatorio-consultar-avancada"
-  @output_path "download_dados/response.txt"
-    def post_request do
-    # Configurar os parâmetros do POST
+  @output_path_csv "download_dados/dados.csv"
+
+  def buscar_ies(sg_ufs) do
+    resultados =
+      sg_ufs
+      |> Enum.map(fn uf -> Task.async(fn -> requisicao_emec(uf) end) end)
+      |> Enum.map(&Task.await/1)
+
+    htmls_por_estado =
+      resultados
+      |> Enum.filter(fn
+        {:ok, _uf, _response_body} -> true
+        _ -> false
+      end)
+
+    cabecalhos =
+      case List.first(htmls_por_estado) do
+        {:ok, _uf, html} ->
+          ["UF" | extrair_cabecalhos(html)]
+
+        nil ->
+          Logger.error("Nenhuma tabela encontrada nos resultados")
+          []
+      end
+
+    tabelas =
+      htmls_por_estado
+      |> Enum.flat_map(fn {:ok, uf, html} ->
+        extrair_tabela(html, uf)
+      end)
+
+    gerar_csv([cabecalhos | tabelas], @output_path_csv)
+  end
+  def requisicao_emec(sg_uf) do
     params = %{
       "data[CONSULTA_AVANCADA_HIDDEN][template]" => "listar-consulta-avancada-ies",
       "data[CONSULTA_AVANCADA_HIDDEN][order]" => "ies.no_ies ASC",
-      "data[CONSULTA_AVANCADA_HIDDEN][no_cidade_avancada]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][no_regiao_avancada]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][no_pais_avancada]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][co_pais_avancada]" => "",
       "data[CONSULTA_AVANCADA_HIDDEN][buscar_por]" => "IES",
-      "data[CONSULTA_AVANCADA_HIDDEN][no_ies]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][no_ies_curso]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][no_ies_curso_especializacao]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][no_curso]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][co_area_geral]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][co_area_especifica]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][co_area_detalhada]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][co_area_curso]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][no_especializacao]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][co_area]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][sg_uf]" => "AM",
-      "data[CONSULTA_AVANCADA_HIDDEN][co_municipio]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][st_gratuito]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][no_indice_ies]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][no_indice_curso]" => "",
+      "data[CONSULTA_AVANCADA_HIDDEN][sg_uf]" => sg_uf,
       "data[CONSULTA_AVANCADA_HIDDEN][co_situacao_funcionamento_ies]" => "10035",
       "data[CONSULTA_AVANCADA_HIDDEN][co_situacao_funcionamento_curso]" => "9",
-      "data[CONSULTA_AVANCADA_HIDDEN][st_funcionamento_especializacao]" => "",
       "data[CONSULTA_AVANCADA_HIDDEN][ds_origem]" => "Avancada",
       "data[CONSULTA_AVANCADA_HIDDEN][ds_objeto]" => "IES",
-      "data[CONSULTA_AVANCADA_HIDDEN][no_cidade]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][no_regiao]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][no_pais]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][co_pais]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][page]" => "",
-      "data[CONSULTA_AVANCADA_HIDDEN][list]" => "",
       "data[CONSULTA_AVANCADA_HIDDEN][hid_format_ext]" => "xls",
       "data[CONSULTA_AVANCADA_HIDDEN][hid_st_nome_consulta]" => "ies"
     }
 
-    # Adicionar a lista manualmente
     list_params = [
       {"data[CONSULTA_AVANCADA_HIDDEN][tp_natureza_gn][]", "3"},
       {"data[CONSULTA_AVANCADA_HIDDEN][tp_natureza_gn][]", "1"},
       {"data[CONSULTA_AVANCADA_HIDDEN][tp_natureza_gn][]", "2"}
     ]
 
-    # Combinar os parâmetros com os campos individuais
     query = URI.encode_query(params) <> "&" <> encode_list(list_params)
 
-    # Cabeçalhos da requisição
     headers = [
       {"Content-Type", "application/x-www-form-urlencoded"}
     ]
 
-    # Fazer a requisição POST
     case HTTPoison.post(@url, query, headers, recv_timeout: 30_000) do
       {:ok, %HTTPoison.Response{status_code: 200, body: response_body}} ->
-        Logger.info("Requisição bem-sucedida.")
-        save_response_to_file(response_body, @output_path)
-        {:ok, response_body}
+        Logger.info("Requisição bem-sucedida para #{sg_uf}!")
+        {:ok, sg_uf, response_body}
 
       {:ok, %HTTPoison.Response{status_code: status_code}} ->
-        Logger.error("Erro: Código de status #{status_code}")
-        {:error, "Erro na requisição"}
+        Logger.error("Erro na requisição para #{sg_uf}. Código de status #{status_code}")
+        {:error, sg_uf, "Erro na requisição"}
 
       {:error, %HTTPoison.Error{reason: reason}} ->
-        Logger.error("Erro ao realizar a requisição: #{inspect(reason)}")
-        {:error, "Erro ao realizar a requisição"}
+        Logger.error("Erro ao realizar a requisição para #{sg_uf}: #{inspect(reason)}")
+        {:error, sg_uf, "Erro ao realizar a requisição"}
     end
   end
 
-   # Função para salvar a resposta em um arquivo de texto
-  defp save_response_to_file(response_body, path) do
-    File.mkdir_p!(Path.dirname(path)) # Garante que o diretório exista
-
-    case File.write(path, response_body) do
-      :ok ->
-        Logger.info("""
-        ============================
-        🟢 Resposta salva com sucesso!
-        ============================
-        Caminho do Arquivo: #{path}
-        """)
-
-      {:error, reason} ->
-        Logger.error("""
-        ============================
-        ❌ Falha ao salvar a resposta
-        ============================
-        Motivo: #{inspect(reason)}
-        """)
-    end
-  end
-
-  # Função auxiliar para codificar listas em parâmetros de consulta
   defp encode_list(list) do
     list
     |> Enum.map(fn {key, value} -> "#{URI.encode(key)}=#{URI.encode(value)}" end)
     |> Enum.join("&")
   end
 
-  def search(query) do
-    # Inicia uma sessão do WebDriver
-    chromium_options = [
-      prefs: %{
-        "download.default_directory" => "/home/casa/ProjectsElixir/request/download_dados"  # Caminho onde você deseja salvar os downloads
-      }
-    ]
-    # Hound.start_session(desired_capabilities: chromium_options)
-    # Iniciando a sessão com as opções configuradas
-    Hound.start_session(desired_capabilities: %{"goog:chromeOptions" => chromium_options})
+  defp extrair_cabecalhos(html) do
+    html
+    |> Floki.parse_document!()
+    |> Floki.find("table#tbDataGridNova thead th")
+    |> Enum.map(&Floki.text/1)
+    |> Enum.map(&String.trim/1)
+  end
 
-    IO.puts("Sessão iniciada com sucesso!")
+  defp extrair_tabela(html, estado) do
+    document = Floki.parse_document!(html)
 
+    linhas =
+      document
+      |> Floki.find("table#tbDataGridNova tbody tr")
+      |> Enum.map(fn tr ->
+        tr
+        |> Floki.find("td")
+        |> Enum.map(&Floki.text/1)
+        |> Enum.map(&String.trim/1)
+        |> List.insert_at(0, estado)
+      end)
+
+    linhas
+  end
+
+  defp gerar_csv(tabela, caminho_csv) do
     try do
-      # Acessa o portal de cadastro nacinal de instituições ensino superior MEC
-      navigate_to("https://emec.mec.gov.br/emec/nova")
-      # Clicar no select
-      find_element(:id, "sel_sg_uf")
-      |> click()
-
-      # Selecionando a opção desejada preenchendo o valor
-      find_element(:xpath, "//option[@value='#{query}']")
-      |> click()
-
-      # Selecionar categoria admistrativa
-      find_element(:css, "input[name='data[CONSULTA_AVANCADA][chk_tp_natureza_gn][]'][value='3']") |> click()
-      find_element(:css, "input[name='data[CONSULTA_AVANCADA][chk_tp_natureza_gn][]'][value='1']") |> click()
-      find_element(:css, "input[name='data[CONSULTA_AVANCADA][chk_tp_natureza_gn][]'][value='2']") |> click()
-
-      click({:id, "btnPesqAvancada"})
-
-
-      # Aguarda um momento para que os resultados sejam carregados
-      :timer.sleep(10000)
-
-      IO.puts "Clicando para exportar para Excel"
-      find_element(:xpath, "//a[contains(@onclick, 'abrirPopUpExportarConsultaAvancada')]")
-      |> click()
-
-      :timer.sleep(5000)
-
+      File.mkdir_p!(Path.dirname(caminho_csv))
+      File.write!(caminho_csv, CSV.encode(tabela) |> Enum.join())
+      Logger.info("CSV consolidado salvo com sucesso: #{caminho_csv}")
+      :ok
     rescue
-      error ->
-        IO.puts("Erro ao realizar a busca: #{inspect(error)}")
-    after
-      # Finaliza a sessão
-      Hound.end_session()
+      exception ->
+        Logger.error("Erro ao salvar o CSV: #{Exception.message(exception)}")
+        {:error, Exception.message(exception)}
     end
   end
+
 end
