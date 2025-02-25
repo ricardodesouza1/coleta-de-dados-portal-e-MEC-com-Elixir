@@ -4,7 +4,7 @@ defmodule Search do
   def search(query) do
     chromium_options = [
       prefs: %{
-        "download.default_directory" => "/home/casa/ProjectsElixir/request/download_dados"  # Caminho onde você deseja salvar os downloads
+        "download.default_directory" => "/home/casa/ProjectsElixir/Automatiza-o-Elixir/download_dados"  # Caminho onde você deseja salvar os downloads
       }
     ]
 
