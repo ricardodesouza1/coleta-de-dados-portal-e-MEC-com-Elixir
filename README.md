@@ -4,7 +4,7 @@
 
 ## Execução do Script
 
-Após o Dowload execute entre no diretório e execute o comando `iex -S mix` e na sequêcia execute o jogo com a função a seguir.
+Após o Dowload execute entre no diretório e execute o comando `iex -S mix` e na sequêcia execute o script de coleta através do comando a seguir.
 
 ```elixir
 Request.buscar_ies(["AC", "AP", "AM", "PA", "RO", "RR", "TO"])
